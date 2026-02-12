@@ -1,0 +1,25 @@
+dataset/
+dataset_organized/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+.DS_Store
+.gradle/
+.kotlin/
+*.iml
+.idea/workspace.xml
+.idea/tasks.xml
+# 排除大型 APK 文件
+app/build/
+app/release/*.apk
+*.apk

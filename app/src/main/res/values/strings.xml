@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">工具智能清点</string>
+    <string name="home_title">工具智能清点</string>
+    <string name="before_work">作业前清点</string>
+    <string name="after_work">作业后清点</string>
+    <string name="history">历史记录</string>
+    <string name="take_photo">拍照</string>
+    <string name="confirm">确认</string>
+    <string name="cancel">取消</string>
+    <string name="back">返回</string>
+    <string name="no_history">暂无历史记录</string>
+    <string name="delete">删除</string>
+    <string name="share">分享</string>
+    <string name="date">日期</string>
+    <string name="tools_count">工具数量</string>
+    <string name="missing_tools">缺失工具</string>
+</resources>
