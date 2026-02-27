@@ -138,20 +138,26 @@ object BlueRegionDetector {
     
     /**
      * 判断像素是否为蓝色
-     * 蓝色判定标准：B通道明显大于R和G通道
+     * 使用HSV色彩空间判断，比RGB更鲁棒，能适应不同光线条件
+     * （偏紫、偏青、偏灰蓝的垫布都能识别）
      */
     private fun isBluePixel(pixel: Int): Boolean {
         val r = Color.red(pixel)
         val g = Color.green(pixel)
         val b = Color.blue(pixel)
         
-        // 蓝色判定条件：
-        // 1. 蓝色通道要足够强 (b > 100)
-        // 2. 蓝色通道要明显大于红色和绿色 (b > r + 30 && b > g + 30)
-        // 3. 或者蓝色占主导且其他颜色较弱 (b > 150 && b > r * 1.5 && b > g * 1.5)
+        // 转换到HSV色彩空间
+        val hsv = FloatArray(3)
+        Color.RGBToHSV(r, g, b, hsv)
+        val h = hsv[0] // 色相 0-360
+        val s = hsv[1] // 饱和度 0-1
+        val v = hsv[2] // 明度 0-1
         
-        return (b > 100 && b > r + 30 && b > g + 30) ||
-               (b > 150 && b > r * 1.5 && b > g * 1.5)
+        // 蓝色判定条件（HSV空间）：
+        // H: 190°~260° 覆盖青蓝到蓝紫的范围
+        // S: > 0.25 排除灰色/白色（降低阈值以适应光线不足的场景）
+        // V: > 0.2 排除太暗的区域
+        return h in 190f..260f && s > 0.25f && v > 0.2f
     }
     
     /**

@@ -129,6 +129,22 @@ object ShareImageGenerator {
             canvas, currentY, workRecord, beforeCount, afterCount, missingTools, comparisonMode, context
         )
         
+        // 绘制版本水印（右下角）
+        val versionText = "v${getVersionName(context)}"
+        val watermarkPaint = TextPaint().apply {
+            color = Color.argb(80, 128, 128, 128) // 半透明灰色
+            textSize = 28f
+            isAntiAlias = true
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
+        }
+        val textWidth = watermarkPaint.measureText(versionText)
+        canvas.drawText(
+            versionText,
+            OUTPUT_WIDTH - PADDING.toFloat() - textWidth,
+            totalHeight - 16f,
+            watermarkPaint
+        )
+        
         // 保存图片
         val outputFile = File(
             context.getExternalFilesDir(null),
@@ -381,12 +397,9 @@ object ShareImageGenerator {
                     // 左侧：作业前工具
                     if (index < beforeToolsList.size) {
                         val tool = beforeToolsList[index]
-                        // 解析工具名称和数量（格式：扳手*1）
                         val parts = tool.split("*")
                         val displayText = if (parts.size == 2) {
-                            val toolName = parts[0]
-                            val count = parts[1].trim().split(" ")[0] // 移除状态信息（如果有）
-                            "  • $toolName × $count"
+                            "  • ${parts[0]} × ${parts[1]}"
                         } else {
                             "  • $tool"
                         }
@@ -401,40 +414,24 @@ object ShareImageGenerator {
                     // 右侧：作业后工具
                     if (index < afterToolsList.size) {
                         val tool = afterToolsList[index]
-                        // 解析工具名称、数量和状态（格式：扳手*1 已存在）
                         val parts = tool.split("*")
                         val displayText = if (parts.size == 2) {
-                            val toolName = parts[0]
-                            val countAndStatus = parts[1].trim()
-                            val countPart = countAndStatus.split(" ")[0]
-                            val statusPart = if (countAndStatus.contains(" ")) {
-                                " ${countAndStatus.substringAfter(" ")}"
-                            } else {
-                                ""
-                            }
-                            "  • $toolName × $countPart$statusPart"
+                            "  • ${parts[0]} × ${parts[1]}"
                         } else {
                             "  • $tool"
                         }
                         
-                        // 检查是否包含状态信息
-                        val hasStatus = tool.contains("已存在") || tool.contains("缺失") || tool.contains("未找到")
-                        val toolPaint = if (hasStatus) {
-                            if (tool.contains("已存在")) {
-                                TextPaint().apply {
-                                    color = Color.parseColor("#4CAF50")
-                                    textSize = 34f
-                                    isAntiAlias = true
-                                }
+                        // 根据对比结果判断颜色：缺失的红色，齐全的绿色
+                        val toolName = tool.split("*")[0]
+                        val isMissing = missingTools.any { it.startsWith("$toolName*") }
+                        val toolPaint = TextPaint().apply {
+                            color = if (isMissing) {
+                                Color.parseColor("#F44336")
                             } else {
-                                TextPaint().apply {
-                                    color = Color.parseColor("#F44336")
-                                    textSize = 34f
-                                    isAntiAlias = true
-                                }
+                                Color.parseColor("#4CAF50")
                             }
-                        } else {
-                            normalPaint
+                            textSize = 34f
+                            isAntiAlias = true
                         }
                         canvas.drawText(
                             displayText,
@@ -479,16 +476,26 @@ object ShareImageGenerator {
                 isAntiAlias = true
             }
             
-            // 从缺失工具列表中提取数量（格式：发现缺失X个工具）
-            val missingCount = missingTools.firstOrNull()?.let { tool ->
-                val match = Regex("发现缺失(\\d+)个工具").find(tool)
-                match?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            } ?: 0
-            
-            val resultText = if (missingTools.isEmpty() || missingCount == 0) {
+            // 根据对比模式解析缺失信息
+            val resultText = if (missingTools.isEmpty()) {
                 "✓ 工具清点完整，无缺失工具"
             } else {
-                "⚠ 发现缺失 $missingCount 个工具"
+                // 兼容两种格式：
+                // 总数量模式："发现缺失X个工具"
+                // 具体工具模式："扳手*1", "螺丝刀*2"
+                val totalMatch = missingTools.firstOrNull()?.let { 
+                    Regex("发现缺失(\\d+)个工具").find(it) 
+                }
+                if (totalMatch != null) {
+                    "⚠ ${missingTools.first()}"
+                } else {
+                    // 具体工具模式：列出缺失的工具名
+                    val missingNames = missingTools.map { tool ->
+                        val parts = tool.split("*")
+                        if (parts.size == 2) "${parts[0]}×${parts[1]}" else tool
+                    }
+                    "⚠ 缺失：${missingNames.joinToString("、")}"
+                }
             }
             
             // 绘制背景框
@@ -531,12 +538,9 @@ object ShareImageGenerator {
                 currentY += LINE_HEIGHT
                 
                 beforeToolsList.forEach { tool ->
-                    // 解析工具名称和数量（格式：扳手*1）
                     val parts = tool.split("*")
                     val displayText = if (parts.size == 2) {
-                        val toolName = parts[0]
-                        val count = parts[1].trim().split(" ")[0] // 移除状态信息（如果有）
-                        "  • $toolName × $count"
+                        "  • ${parts[0]} × ${parts[1]}"
                     } else {
                         "  • $tool"
                     }
@@ -561,5 +565,17 @@ object ShareImageGenerator {
         }
         
         return currentY
+    }
+    
+    /**
+     * 获取应用版本名称
+     */
+    private fun getVersionName(context: Context): String {
+        return try {
+            val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            packageInfo.versionName ?: "2.0"
+        } catch (e: Exception) {
+            "2.0"
+        }
     }
 }

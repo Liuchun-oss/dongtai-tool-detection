@@ -1,7 +1,9 @@
 package com.android.dongtai.navigation
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -342,7 +344,6 @@ fun NavGraph(
                     workRecord = it,
                     viewModel = viewModel,
                     onSaveComplete = {
-                        // 保存成功后返回首页
                         navController.popBackStack(navController.graph.startDestinationId, false)
                     },
                     onCancel = {
@@ -353,8 +354,16 @@ fun NavGraph(
                     }
                 )
             } ?: run {
-                // 加载中或记录不存在
-                CircularProgressIndicator()
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("加载记录中...", style = androidx.compose.material3.MaterialTheme.typography.bodyMedium)
+                    }
+                }
             }
         }
         
@@ -382,16 +391,22 @@ fun NavGraph(
                     onBack = {
                         navController.popBackStack()
                     },
-                    onShare = {
-                        // TODO: 实现分享功能
-                    },
+                    onShare = { },
                     onImageClick = { imagePath ->
                         navController.navigate(Screen.FullScreenImage.createRoute(imagePath))
                     }
                 )
             } ?: run {
-                // 加载中或记录不存在
-                CircularProgressIndicator()
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("加载记录中...", style = androidx.compose.material3.MaterialTheme.typography.bodyMedium)
+                    }
+                }
             }
         }
         

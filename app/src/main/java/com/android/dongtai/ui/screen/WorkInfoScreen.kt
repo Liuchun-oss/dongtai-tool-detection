@@ -7,6 +7,7 @@ import android.os.Build
 import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -48,6 +50,7 @@ import com.android.dongtai.data.entity.RecordType
 import com.android.dongtai.data.entity.ToolRecord
 import com.android.dongtai.service.OnnxToolDetectionService
 import com.android.dongtai.ui.viewmodel.ToolRecordViewModel
+import com.android.dongtai.utils.DetectionHelper
 import com.android.dongtai.utils.DetectionLogger
 import com.android.dongtai.utils.SettingsManager
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
@@ -159,7 +162,6 @@ fun WorkInfoScreen(
     // 识别工具（检查自动识别设置）
     LaunchedEffect(imagePath, triggerRecognition) {
         if (imagePath != null) {
-            // 检查自动识别设置
             val autoRecognition = SettingsManager.getAutoRecognition(context)
             if (!autoRecognition) {
                 DetectionLogger.log(DetectionLogger.Level.INFO, "自动识别已关闭（设置中），跳过识别")
@@ -169,122 +171,18 @@ fun WorkInfoScreen(
             isDetecting = true
             detectedCount = 0
             
-            // 删除旧的标注图片（如果存在）
-            val annotatedPath = imagePath!!.replace(".jpg", "_annotated.jpg")
-            val annotatedFile = File(annotatedPath)
-            if (annotatedFile.exists()) {
-                annotatedFile.delete()
-                DetectionLogger.log(DetectionLogger.Level.INFO, "删除旧的标注图片")
-            }
+            val result = DetectionHelper.detectTools(context, imagePath!!, useTTA = isReRecognizing)
             
-            val detectionService = OnnxToolDetectionService.getInstance(context)
-            
-            // 如果是重新识别，更大幅度地降低置信度阈值，尝试检测到更多工具
-            val detectedToolsJson = if (isReRecognizing) {
-                val baseConfidence = SettingsManager.getConfidenceThreshold(context)
-                val baseIou = SettingsManager.getIouThreshold(context)
-                
-                // 重新识别时：更大幅度地降低置信度阈值（降低0.1-0.15），尝试检测到更多工具
-                // 这样可以检测到置信度较低但可能正确的工具（比如螺丝刀被误识别为扳手的情况）
-                val confidenceReduction = kotlin.random.Random.nextFloat() * 0.05f + 0.1f // 降低0.1-0.15
-                val adjustedConfidence = (baseConfidence - confidenceReduction).coerceAtLeast(0.1f)
-                
-                // IOU阈值稍微降低，避免过度过滤
-                val iouReduction = kotlin.random.Random.nextFloat() * 0.05f + 0.05f // 降低0.05-0.1
-                val adjustedIou = (baseIou - iouReduction).coerceAtLeast(0.2f)
-                
-                DetectionLogger.log(
-                    DetectionLogger.Level.INFO,
-                    "重新识别：大幅降低阈值以检测更多工具 - 置信度 ${String.format("%.3f", baseConfidence)} -> ${String.format("%.3f", adjustedConfidence)} (降低${String.format("%.3f", confidenceReduction)}), IOU ${String.format("%.3f", baseIou)} -> ${String.format("%.3f", adjustedIou)}"
-                )
-                
-                detectionService.detectTools(
-                    imagePath!!,
-                    null,
-                    overrideConfidenceThreshold = adjustedConfidence,
-                    overrideIouThreshold = adjustedIou
-                )
-            } else {
-                detectionService.detectTools(imagePath!!)
-            }
-            
-            toolsJson = detectedToolsJson // 保存工具JSON
-            
-            // 记录识别结果，用于调试
-            DetectionLogger.log(DetectionLogger.Level.INFO, "识别完成 - detectedToolsJson: $detectedToolsJson")
-            DetectionLogger.log(DetectionLogger.Level.INFO, "识别完成 - toolsJson已赋值: $toolsJson")
-            
-            // 根据对比模式解析工具数量
-            val comparisonMode = SettingsManager.getComparisonMode(context)
-            if (comparisonMode == "specific_tools" && detectedToolsJson != null) {
-                // 具体工具数量对比模式：从工具列表解析
-                try {
-                    val toolsList = OnnxToolDetectionService.parseToolsJson(detectedToolsJson)
-                    val countFromList = toolsList.sumOf { tool ->
-                        val parts = tool.split("*")
-                        if (parts.size == 2) parts[1].toIntOrNull() ?: 0 else 0
-                    }
-                    DetectionLogger.log(DetectionLogger.Level.INFO, "具体工具列表解析 - toolsList: $toolsList, countFromList: $countFromList")
-                    
-                    // 使用从列表解析的数量
-                    detectedCount = countFromList
-                    
-                    // 为检测到的工具设置一个较高的置信度（用于排序）
-                    detectedToolsWithConfidence = toolsList.map { tool ->
-                        val toolName = tool.split("*")[0]
-                        toolName to 0.9f // 检测到的工具置信度设为0.9
-                    }.toMap()
-                } catch (e: Exception) {
-                    DetectionLogger.log(DetectionLogger.Level.WARN, "解析工具列表失败: ${e.message}, detectedToolsJson: $detectedToolsJson")
-                    // 如果解析失败，尝试使用parseToolCount
-                    val parsedCount = OnnxToolDetectionService.parseToolCount(detectedToolsJson)
-                    detectedCount = parsedCount
-                    DetectionLogger.log(DetectionLogger.Level.WARN, "使用parseToolCount解析: $parsedCount")
-                    detectedToolsWithConfidence = emptyMap()
-                }
-            } else {
-                // 总数量对比模式：使用parseToolCount
-                val parsedCount = OnnxToolDetectionService.parseToolCount(detectedToolsJson)
-                detectedCount = parsedCount
-                DetectionLogger.log(DetectionLogger.Level.INFO, "总数量对比模式 - parsedCount: $parsedCount")
-                detectedToolsWithConfidence = emptyMap()
-            }
+            toolsJson = result.toolsJson
+            detectedCount = result.detectedCount
+            detectedToolsWithConfidence = result.toolsWithConfidence
             
             DetectionLogger.log(DetectionLogger.Level.INFO, "最终detectedCount: $detectedCount")
             
             isDetecting = false
-            isReRecognizing = false // 重置标记
+            isReRecognizing = false
             
-            // 反馈设置：震动和声音
-            val vibrationFeedback = SettingsManager.getVibrationFeedback(context)
-            val soundFeedback = SettingsManager.getSoundFeedback(context)
-            
-            if (vibrationFeedback) {
-                // 震动反馈
-                try {
-                    val vibrator = context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? android.os.Vibrator
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                        vibrator?.vibrate(android.os.VibrationEffect.createOneShot(100, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
-                    } else {
-                        @Suppress("DEPRECATION")
-                        vibrator?.vibrate(100)
-                    }
-                } catch (e: Exception) {
-                    DetectionLogger.log(DetectionLogger.Level.WARN, "震动反馈失败: ${e.message}")
-                }
-            }
-            
-            if (soundFeedback) {
-                // 声音反馈（使用系统通知音）
-                try {
-                    val notification = android.app.Notification.Builder(context, "detection_channel")
-                        .setSound(android.provider.Settings.System.DEFAULT_NOTIFICATION_URI)
-                        .build()
-                    // 这里只是示例，实际可以使用 MediaPlayer 播放声音
-                } catch (e: Exception) {
-                    DetectionLogger.log(DetectionLogger.Level.WARN, "声音反馈失败: ${e.message}")
-                }
-            }
+            DetectionHelper.triggerFeedback(context)
         }
     }
     
@@ -292,19 +190,27 @@ fun WorkInfoScreen(
         topBar = {
             TopAppBar(
                 title = { 
-                    Text(
-                        text = if (recordType == RecordType.BEFORE_WORK) {
-                            "作业前清点"
-                        } else {
-                            "作业后清点"
-                        }
-                    ) 
+                    Column {
+                        Text(
+                            text = if (recordType == RecordType.BEFORE_WORK) "作业前清点" else "作业后清点",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (imagePath == null) "填写信息并拍照" else if (isDetecting) "AI识别中..." else "确认信息后提交",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                        )
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onCancel) {
                         Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
-                }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
             )
         }
     ) { paddingValues ->
@@ -358,12 +264,40 @@ fun WorkInfoScreen(
                     .padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-            // 标题
-            Text(
-                text = "请输入作业信息",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-            )
+            // 信息输入区域标题
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                            RoundedCornerShape(10.dp)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = "作业信息",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "填写作业组和地点后拍照识别",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+            }
             
             // 作业组下拉框（必填）
             ExposedDropdownMenuBox(
@@ -381,6 +315,7 @@ fun WorkInfoScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .menuAnchor(),
+                    shape = RoundedCornerShape(14.dp),
                     isError = workGroupError,
                     supportingText = if (workGroupError) {
                         { Text("请选择作业组", color = MaterialTheme.colorScheme.error) }
@@ -409,11 +344,12 @@ fun WorkInfoScreen(
                 value = workLocation,
                 onValueChange = { 
                     workLocation = it
-                    workLocationError = false  // 清除错误状态
+                    workLocationError = false
                 },
                 label = { Text("作业地点 *") },
                 placeholder = { Text("请输入作业地点") },
                 modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
                 isError = workLocationError,
                 supportingText = if (workLocationError) {
                     { Text("请输入作业地点", color = MaterialTheme.colorScheme.error) }
@@ -424,7 +360,15 @@ fun WorkInfoScreen(
             // 拍照区域
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp)
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (imagePath == null) 
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                ),
+                border = if (imagePath == null) BorderStroke(
+                    1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                ) else null
             ) {
                 Box(
                     modifier = Modifier
@@ -432,7 +376,7 @@ fun WorkInfoScreen(
                         .height(if (imagePath == null) 300.dp else 400.dp)
                 ) {
                     if (imagePath == null) {
-                        // 显示加号按钮
+                        // 空状态 - 高端拍照引导
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
@@ -441,29 +385,45 @@ fun WorkInfoScreen(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.Center
                             ) {
-                                IconButton(
-                                    onClick = {
-                                        if (cameraPermissionState.status is PermissionStatus.Granted) {
-                                            // 调用系统相机
-                                            launchCamera()
-                                        } else {
-                                            cameraPermissionState.launchPermissionRequest()
-                                        }
-                                    },
-                                    modifier = Modifier.size(64.dp)
+                                Box(
+                                    modifier = Modifier
+                                        .size(72.dp)
+                                        .background(
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                                            RoundedCornerShape(20.dp)
+                                        ),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Add,
-                                        contentDescription = "拍照",
-                                        modifier = Modifier.size(48.dp),
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
+                                    IconButton(
+                                        onClick = {
+                                            if (cameraPermissionState.status is PermissionStatus.Granted) {
+                                                launchCamera()
+                                            } else {
+                                                cameraPermissionState.launchPermissionRequest()
+                                            }
+                                        },
+                                        modifier = Modifier.size(72.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CameraAlt,
+                                            contentDescription = "拍照",
+                                            modifier = Modifier.size(36.dp),
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
                                 }
-                                Spacer(modifier = Modifier.height(8.dp))
+                                Spacer(modifier = Modifier.height(14.dp))
                                 Text(
-                                    text = "点击拍照",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    text = "拍摄工具照片",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "请将工具平铺在蓝色垫布上",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                                 )
                             }
                         }
@@ -575,12 +535,24 @@ fun WorkInfoScreen(
                 }
             }
             
-            // 识别状态
+            // 识别状态（带脉冲动画）
             if (isDetecting) {
+                val infiniteTransition = rememberInfiniteTransition(label = "detecting")
+                val alpha by infiniteTransition.animateFloat(
+                    initialValue = 0.6f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(800, easing = EaseInOut),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "pulse"
+                )
+                
                 Card(
                     modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = alpha)
                     )
                 ) {
                     Row(
@@ -591,12 +563,14 @@ fun WorkInfoScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = "AI识别中...",
-                            style = MaterialTheme.typography.bodyLarge
+                            text = "AI 正在识别工具...",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium
                         )
                     }
                 }
@@ -607,9 +581,14 @@ fun WorkInfoScreen(
                 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
+                        containerColor = if (actualCount > 0) 
+                            Color(0xFF4CAF50).copy(alpha = 0.08f)
+                        else 
+                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
@@ -709,8 +688,11 @@ fun WorkInfoScreen(
                 // 所有可用的工具名称列表
                 val allToolNames = listOf(
                     "扳手", "钳子", "刻刀", "内六角套装", "钥匙", "活口扳手", "螺丝刀", "毛刷",
-                    "工具A09", "套筒", "工具A11", "电烙铁", "卷尺", "风机", "角磨机", "电钻",
-                    "移动电源", "工具A19", "工具A20", "工具A21", "工具A22", "镐", "锹"
+                    "套筒扳手", "套筒", "带手柄内六角", "电烙铁", "卷尺", "胶带", "风机", "角膜",
+                    "电钻", "移动电源", "探头1", "探头2", "探头3", "内六角", "吹风机", "管钳子",
+                    "线缆", "黑体", "定标仪", "计时器", "口哨", "对讲机", "防护旗", "手灯",
+                    "黑体2", "万用表", "磁钢尺", "喷壶", "瓶子", "小卷尺", "自喷漆", "收纳箱",
+                    "移动电源2", "工具箱", "锯", "手锤", "标签", "T形扳手"
                 )
                 
                 var manualToolCounts by remember(showManualAdjustDialog, detectedToolsList) {
@@ -1139,25 +1121,41 @@ fun WorkInfoScreen(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(24.dp),
+                    .padding(horizontal = 24.dp, vertical = 16.dp)
+                    .height(52.dp),
+                shape = RoundedCornerShape(14.dp),
                 enabled = workGroup.isNotBlank() && 
                          workGroup != "请选择" &&
                          workLocation.isNotBlank() && 
                          imagePath != null &&
                          !isDetecting &&
-                         actualCount > 0 &&  // 必须识别到至少1件工具
-                         detectedCount > 0   // 确保detectedCount也大于0
+                         actualCount > 0 &&
+                         detectedCount > 0
             ) {
-                Text("提交保存", style = MaterialTheme.typography.bodyLarge)
+                Text("提交保存", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
             }
         }
         
-        // 成功提示对话框
+        // 成功提示对话框（高端版）
         if (showSuccessDialog) {
             AlertDialog(
                 onDismissRequest = { },
-                title = { Text("提交成功") },
-                text = { Text("工具清点记录已保存") },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = Color(0xFF4CAF50),
+                        modifier = Modifier.size(48.dp)
+                    )
+                },
+                title = { 
+                    Text(
+                        "提交成功",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = { Text("工具清点记录已保存", style = MaterialTheme.typography.bodyMedium) },
                 confirmButton = {
                     TextButton(
                         onClick = {
@@ -1167,7 +1165,8 @@ fun WorkInfoScreen(
                     ) {
                         Text("确定")
                     }
-                }
+                },
+                shape = RoundedCornerShape(24.dp)
             )
         }
     }

@@ -10,7 +10,10 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
@@ -73,13 +76,7 @@ fun RecordDetailScreen(
             DetectionLogger.log(DetectionLogger.Level.INFO, "RecordDetailScreen - 计算beforeCount - 列表格式 - toolsList: $toolsList")
             val count = toolsList.sumOf { tool ->
                 val parts = tool.split("*")
-                if (parts.size == 2) {
-                    // 移除状态信息（如果有）
-                    val countPart = parts[1].trim().split(" ")[0]
-                    countPart.toIntOrNull() ?: 0
-                } else {
-                    0
-                }
+                if (parts.size == 2) parts[1].toIntOrNull() ?: 0 else 0
             }
             DetectionLogger.log(DetectionLogger.Level.INFO, "RecordDetailScreen - beforeCount: $count")
             count
@@ -99,13 +96,7 @@ fun RecordDetailScreen(
                 DetectionLogger.log(DetectionLogger.Level.INFO, "RecordDetailScreen - 计算afterCount - 列表格式 - toolsList: $toolsList")
                 val count = toolsList.sumOf { tool ->
                     val parts = tool.split("*")
-                    if (parts.size == 2) {
-                        // 移除状态信息（如果有）
-                        val countPart = parts[1].trim().split(" ")[0]
-                        countPart.toIntOrNull() ?: 0
-                    } else {
-                        0
-                    }
+                    if (parts.size == 2) parts[1].toIntOrNull() ?: 0 else 0
                 }
                 DetectionLogger.log(DetectionLogger.Level.INFO, "RecordDetailScreen - afterCount: $count")
                 count
@@ -313,9 +304,8 @@ fun RecordDetailScreen(
                     }
                 }
                 
-                // 左右切换按钮（仅在有多张图片时显示）
+                // 左右切换按钮（半透明圆形背景，在任何图片上都清晰可见）
                 if (imagePaths.size > 1) {
-                    // 左箭头
                     if (pagerState.currentPage > 0) {
                         IconButton(
                             onClick = {
@@ -326,16 +316,19 @@ fun RecordDetailScreen(
                             modifier = Modifier
                                 .align(Alignment.CenterStart)
                                 .padding(8.dp)
+                                .background(
+                                    Color.Black.copy(alpha = 0.35f),
+                                    shape = CircleShape
+                                )
                         ) {
                             Icon(
                                 imageVector = Icons.Default.ArrowBack,
                                 contentDescription = "上一张",
-                                tint = MaterialTheme.colorScheme.onSurface
+                                tint = Color.White
                             )
                         }
                     }
                     
-                    // 右箭头
                     if (pagerState.currentPage < imagePaths.size - 1) {
                         IconButton(
                             onClick = {
@@ -346,21 +339,26 @@ fun RecordDetailScreen(
                             modifier = Modifier
                                 .align(Alignment.CenterEnd)
                                 .padding(8.dp)
+                                .background(
+                                    Color.Black.copy(alpha = 0.35f),
+                                    shape = CircleShape
+                                )
                         ) {
                             Icon(
                                 imageVector = Icons.Default.ArrowForward,
                                 contentDescription = "下一张",
-                                tint = MaterialTheme.colorScheme.onSurface
+                                tint = Color.White
                             )
                         }
                     }
                 }
             }
             
-            // 总结报告区域
+            // 总结报告区域（可滚动，工具列表长时不会被截断）
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .weight(1f)
                     .padding(16.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = if (workRecord.afterRecord != null && missingTools.isEmpty()) {
@@ -373,7 +371,9 @@ fun RecordDetailScreen(
                 )
             ) {
                 Column(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     // 标题
@@ -446,10 +446,8 @@ fun RecordDetailScreen(
                                     fontWeight = FontWeight.Bold
                                 )
                                 beforeToolsList.forEach { tool ->
-                                    // 移除状态信息（如果有）
-                                    val toolText = tool.split(" ")[0]
                                     Text(
-                                        text = "  • $toolText",
+                                        text = "  • $tool",
                                         style = MaterialTheme.typography.bodySmall,
                                         modifier = Modifier.padding(start = 8.dp)
                                     )
@@ -467,24 +465,35 @@ fun RecordDetailScreen(
                                         fontWeight = FontWeight.Bold
                                     )
                                     afterToolsList.forEach { tool ->
-                                        // 检查是否包含状态信息
-                                        val hasStatus = tool.contains("已存在") || tool.contains("缺失") || tool.contains("未找到")
-                                        val textColor = if (hasStatus) {
-                                            if (tool.contains("已存在")) {
-                                                Color(0xFF4CAF50) // 绿色
-                                            } else {
-                                                MaterialTheme.colorScheme.error // 红色
-                                            }
+                                        // 根据对比结果判断颜色：缺失的工具显示红色，齐全的显示绿色
+                                        val toolName = tool.split("*")[0]
+                                        val isMissing = missingTools.any { it.startsWith("$toolName*") }
+                                        val textColor = if (isMissing) {
+                                            MaterialTheme.colorScheme.error
                                         } else {
-                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                            Color(0xFF4CAF50) // 绿色
                                         }
                                         Text(
                                             text = "  • $tool",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = textColor,
-                                            fontWeight = if (hasStatus) FontWeight.Medium else FontWeight.Normal,
                                             modifier = Modifier.padding(start = 8.dp)
                                         )
+                                    }
+                                    
+                                    // 显示作业后未识别到但作业前有的工具（缺失的）
+                                    missingTools.forEach { missing ->
+                                        val missingName = missing.split("*")[0]
+                                        val alreadyShown = afterToolsList.any { it.startsWith("$missingName*") }
+                                        if (!alreadyShown) {
+                                            Text(
+                                                text = "  • $missing（缺失）",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.error,
+                                                fontWeight = FontWeight.Medium,
+                                                modifier = Modifier.padding(start = 8.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }

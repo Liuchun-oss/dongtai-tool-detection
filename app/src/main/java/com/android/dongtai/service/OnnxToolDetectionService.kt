@@ -112,12 +112,18 @@ class OnnxToolDetectionService(private val context: Context) {
         val scaledY = detectionY - letterboxPadY
         
         // 步骤2：从缩放后的图片空间转换到原图空间（除以scale）
-        val originalX = scaledX / letterboxScale
-        val originalY = scaledY / letterboxScale
-        val originalWidth_scaled = detectionWidth / letterboxScale
-        val originalHeight_scaled = detectionHeight / letterboxScale
+        val origX = scaledX / letterboxScale
+        val origY = scaledY / letterboxScale
+        val origW = detectionWidth / letterboxScale
+        val origH = detectionHeight / letterboxScale
         
-        return Pair(Pair(originalX, originalY), Pair(originalWidth_scaled, originalHeight_scaled))
+        // 步骤3：Clamp 到原图范围内，防止坐标越界导致后续过滤判断出错
+        val clampedX = origX.coerceIn(0f, originalWidth.toFloat())
+        val clampedY = origY.coerceIn(0f, originalHeight.toFloat())
+        val clampedW = origW.coerceAtMost(originalWidth.toFloat())
+        val clampedH = origH.coerceAtMost(originalHeight.toFloat())
+        
+        return Pair(Pair(clampedX, clampedY), Pair(clampedW, clampedH))
     }
     
     /**
@@ -203,7 +209,8 @@ class OnnxToolDetectionService(private val context: Context) {
         imagePath: String, 
         beforeToolsJson: String? = null,
         overrideConfidenceThreshold: Float? = null,
-        overrideIouThreshold: Float? = null
+        overrideIouThreshold: Float? = null,
+        useTTA: Boolean = false
     ): String = withContext(Dispatchers.IO) {
         val startTime = System.currentTimeMillis()
         val detectionTimeout = SettingsManager.getDetectionTimeout(context) * 1000L // 转换为毫秒
@@ -244,42 +251,53 @@ class OnnxToolDetectionService(private val context: Context) {
                         DetectionLogger.logPreprocess(imagePath, bitmap.width, bitmap.height, true)
                         DetectionLogger.log(DetectionLogger.Level.INFO, "图片加载完成，尺寸: ${bitmap.width}x${bitmap.height}")
                         
-                        val preprocessedImage = preprocessImage(bitmap)
-                        DetectionLogger.log(DetectionLogger.Level.INFO, "图片预处理完成，buffer大小: ${preprocessedImage.capacity()}")
-                        
-                        // 记录使用的阈值（如果有临时覆盖）
-                        if (overrideConfidenceThreshold != null || overrideIouThreshold != null) {
-                            DetectionLogger.log(
-                                DetectionLogger.Level.INFO,
-                                "使用临时阈值: 置信度=${overrideConfidenceThreshold ?: getConfidenceThreshold()}, IOU=${overrideIouThreshold ?: getIouThreshold()}"
-                            )
+                        // 自适应图像增强（提升暗光/低对比度场景的识别率）
+                        val enhancedBitmap = enhanceImage(bitmap)
+                        if (enhancedBitmap !== bitmap) {
+                            bitmap.recycle()
+                            bitmap = enhancedBitmap
                         }
                         
-                        // 运行推理
-                        DetectionLogger.log(DetectionLogger.Level.INFO, "开始运行推理...")
+                        // 运行推理（根据TTA模式选择）
+                        DetectionLogger.log(DetectionLogger.Level.INFO, "开始运行推理... (TTA=${useTTA})")
                         val inferenceStart = System.currentTimeMillis()
-                        val detections = runInference(preprocessedImage, overrideConfidenceThreshold)
-                        val inferenceDuration = System.currentTimeMillis() - inferenceStart
-                        DetectionLogger.logInference(inferenceDuration, detections.size, true)
-                        DetectionLogger.log(DetectionLogger.Level.INFO, "推理完成，检测到 ${detections.size} 个候选框")
+                        
+                        val filteredDetections = if (useTTA) {
+                            // TTA模式：原图+翻转+旋转，合并去重
+                            val ttaDetections = runTTAInference(bitmap)
+                            val inferenceDuration = System.currentTimeMillis() - inferenceStart
+                            DetectionLogger.logInference(inferenceDuration, ttaDetections.size, true)
+                            DetectionLogger.log(DetectionLogger.Level.INFO, "TTA推理完成，合并去重后 ${ttaDetections.size} 个检测框")
+                            ttaDetections
+                        } else {
+                            // 普通模式
+                            val preprocessedImage = preprocessImage(bitmap)
+                            DetectionLogger.log(DetectionLogger.Level.INFO, "图片预处理完成，buffer大小: ${preprocessedImage.capacity()}")
+                            
+                            if (overrideConfidenceThreshold != null || overrideIouThreshold != null) {
+                                DetectionLogger.log(
+                                    DetectionLogger.Level.INFO,
+                                    "使用临时阈值: 置信度=${overrideConfidenceThreshold ?: getConfidenceThreshold()}, IOU=${overrideIouThreshold ?: getIouThreshold()}"
+                                )
+                            }
+                            
+                            val detections = runInference(preprocessedImage, overrideConfidenceThreshold)
+                            val inferenceDuration = System.currentTimeMillis() - inferenceStart
+                            DetectionLogger.logInference(inferenceDuration, detections.size, true)
+                            DetectionLogger.log(DetectionLogger.Level.INFO, "推理完成，检测到 ${detections.size} 个候选框")
+                            
+                            // NMS
+                            DetectionLogger.log(DetectionLogger.Level.INFO, "开始NMS后处理...")
+                            val nmsResult = applyNMS(detections, overrideIouThreshold)
+                            DetectionLogger.logNMS(detections.size, nmsResult.size)
+                            nmsResult
+                        }
                         
                         // 检测蓝色区域
                         DetectionLogger.log(DetectionLogger.Level.INFO, "开始检测蓝色区域...")
                         val blueRegionExpandPixels = getBlueRegionExpandPixels()
                         val blueRegionOptimize = SettingsManager.getBlueRegionOptimize(context)
                         val blueRegion = BlueRegionDetector.detectBlueRegion(bitmap, blueRegionExpandPixels, blueRegionOptimize)
-                        
-                        // 后处理：NMS（非极大值抑制）
-                    DetectionLogger.log(DetectionLogger.Level.INFO, "开始NMS后处理...")
-                    val filteredDetections = applyNMS(detections, overrideIouThreshold)
-                    DetectionLogger.logNMS(detections.size, filteredDetections.size)
-                    
-                    // 记录每个检测框的Top-3类别置信度（用于排查识别错误）
-                    if (filteredDetections.isNotEmpty()) {
-                        DetectionLogger.log(DetectionLogger.Level.INFO, "记录检测框的Top-3类别置信度（用于排查识别错误）...")
-                        // 注意：这里需要重新运行推理来获取所有类别的置信度，但为了性能，我们只在日志中记录
-                        // 实际应用中，可以考虑在runInference中保存所有类别的置信度
-                    }
                     
                     // 过滤1：只保留蓝色区域内的检测结果
                     val blueRegionDetections = if (blueRegion != null) {
@@ -717,7 +735,7 @@ class OnnxToolDetectionService(private val context: Context) {
     
     /**
      * 加载图片并根据EXIF信息旋转
-     * 使用采样优化，减少内存占用
+     * 使用两步缩放：先粗采样再精缩放，保留更多细节
      */
     private fun loadAndRotateImage(imagePath: String): Bitmap {
         // 先读取图片尺寸，计算采样率
@@ -726,21 +744,38 @@ class OnnxToolDetectionService(private val context: Context) {
         }
         BitmapFactory.decodeFile(imagePath, options)
         
-        // 如果图片太大，使用采样缩小（最大2048x2048）
-        val maxSize = 2048
-        val sampleSize = if (options.outWidth > maxSize || options.outHeight > maxSize) {
-            val widthRatio = options.outWidth / maxSize
-            val heightRatio = options.outHeight / maxSize
-            maxOf(widthRatio, heightRatio)
-        } else {
-            1
+        val originalWidth = options.outWidth
+        val originalHeight = options.outHeight
+        
+        // 目标最大尺寸（提高到2560，给模型更多细节）
+        val maxSize = 2560
+        
+        // 第一步：粗采样（inSampleSize 只能是2的幂次，用于快速降低内存占用）
+        // 计算最小的2的幂次使得尺寸不超过 maxSize * 2（留余量给精缩放）
+        var sampleSize = 1
+        val halfMaxSize = maxSize * 2
+        while (originalWidth / (sampleSize * 2) > halfMaxSize || originalHeight / (sampleSize * 2) > halfMaxSize) {
+            sampleSize *= 2
         }
         
-        // 解码图片（使用采样）
+        // 解码图片（粗采样）
         options.inJustDecodeBounds = false
         options.inSampleSize = sampleSize
-        val bitmap = BitmapFactory.decodeFile(imagePath, options)
+        options.inPreferredConfig = Bitmap.Config.ARGB_8888
+        var bitmap = BitmapFactory.decodeFile(imagePath, options)
             ?: throw IllegalStateException("无法加载图片: $imagePath")
+        
+        // 第二步：精缩放（使用双线性插值，保留更多细节）
+        if (bitmap.width > maxSize || bitmap.height > maxSize) {
+            val scale = maxSize.toFloat() / maxOf(bitmap.width, bitmap.height)
+            val newWidth = (bitmap.width * scale).toInt()
+            val newHeight = (bitmap.height * scale).toInt()
+            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+            bitmap.recycle()
+            bitmap = scaledBitmap
+            DetectionLogger.log(DetectionLogger.Level.INFO, 
+                "图片精缩放: ${options.outWidth}x${options.outHeight} -> ${newWidth}x${newHeight}")
+        }
         
         // 读取EXIF信息以获取正确的旋转角度
         val exif = ExifInterface(imagePath)
@@ -760,10 +795,73 @@ class OnnxToolDetectionService(private val context: Context) {
             bitmap
         } else {
             val rotatedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-            // 回收原始bitmap
             bitmap.recycle()
             rotatedBitmap
         }
+    }
+    
+    /**
+     * 自适应图像增强（简化版CLAHE思路）
+     * 对亮度通道做对比度拉伸，提升暗光环境下工具的可辨识度
+     */
+    private fun enhanceImage(bitmap: Bitmap): Bitmap {
+        val width = bitmap.width
+        val height = bitmap.height
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        
+        // 统计亮度直方图
+        val histogram = IntArray(256)
+        for (pixel in pixels) {
+            val r = (pixel shr 16) and 0xFF
+            val g = (pixel shr 8) and 0xFF
+            val b = pixel and 0xFF
+            val luminance = (0.299 * r + 0.587 * g + 0.114 * b).toInt().coerceIn(0, 255)
+            histogram[luminance]++
+        }
+        
+        // 计算亮度的2%和98%分位数，用于对比度拉伸
+        val totalPixels = width * height
+        val lowThreshold = (totalPixels * 0.02).toInt()
+        val highThreshold = (totalPixels * 0.98).toInt()
+        
+        var cumSum = 0
+        var lowVal = 0
+        var highVal = 255
+        for (i in 0..255) {
+            cumSum += histogram[i]
+            if (cumSum >= lowThreshold && lowVal == 0) lowVal = i
+            if (cumSum >= highThreshold) { highVal = i; break }
+        }
+        
+        // 如果对比度已经足够好（范围>180），不做增强
+        if (highVal - lowVal > 180) {
+            DetectionLogger.log(DetectionLogger.Level.INFO, 
+                "图像对比度良好(范围${highVal - lowVal})，跳过增强")
+            return bitmap
+        }
+        
+        DetectionLogger.log(DetectionLogger.Level.INFO, 
+            "图像增强: 亮度范围 $lowVal-$highVal -> 0-255")
+        
+        // 构建查找表（LUT）做对比度拉伸
+        val range = (highVal - lowVal).coerceAtLeast(1).toFloat()
+        val lut = IntArray(256) { i ->
+            ((i - lowVal) * 255f / range).toInt().coerceIn(0, 255)
+        }
+        
+        // 应用LUT到每个像素
+        for (i in pixels.indices) {
+            val a = (pixels[i] shr 24) and 0xFF
+            val r = lut[((pixels[i] shr 16) and 0xFF)]
+            val g = lut[((pixels[i] shr 8) and 0xFF)]
+            val b = lut[(pixels[i] and 0xFF)]
+            pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
+        }
+        
+        val enhanced = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        enhanced.setPixels(pixels, 0, width, 0, 0, width, height)
+        return enhanced
     }
     
     /**
@@ -991,6 +1089,139 @@ class OnnxToolDetectionService(private val context: Context) {
         val unionArea = area1 + area2 - intersectArea
         
         return if (unionArea > 0) intersectArea / unionArea else 0f
+    }
+    
+    /**
+     * Test-Time Augmentation (TTA) 推理
+     * 对原图做多种变换分别推理，合并结果后NMS去重，提升召回率
+     * 变换方式：原图 + 水平翻转 + 轻微旋转(+5°)
+     * @param bitmap 原始图片（已加载旋转校正后的）
+     * @return 合并去重后的检测结果列表
+     */
+    private fun runTTAInference(bitmap: Bitmap): List<Detection> {
+        val allDetections = mutableListOf<Detection>()
+        val imgW = bitmap.width.toFloat()
+        val imgH = bitmap.height.toFloat()
+        
+        // ===== 1. 原图推理 =====
+        DetectionLogger.log(DetectionLogger.Level.INFO, "TTA: 原图推理...")
+        val origBuffer = preprocessImage(bitmap)
+        val origScale = letterboxScale
+        val origPadX = letterboxPadX
+        val origPadY = letterboxPadY
+        val origDetections = runInference(origBuffer)
+        allDetections.addAll(origDetections)
+        DetectionLogger.log(DetectionLogger.Level.INFO, "TTA: 原图检测到 ${origDetections.size} 个候选框")
+        
+        // ===== 2. 水平翻转推理 =====
+        DetectionLogger.log(DetectionLogger.Level.INFO, "TTA: 水平翻转推理...")
+        val flipMatrix = Matrix().apply { preScale(-1f, 1f, bitmap.width / 2f, bitmap.height / 2f) }
+        val flippedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, flipMatrix, true)
+        try {
+            val flipBuffer = preprocessImage(flippedBitmap)
+            val flipScale = letterboxScale
+            val flipPadX = letterboxPadX
+            val flipPadY = letterboxPadY
+            val flipDetections = runInference(flipBuffer)
+            
+            // 将翻转图的检测框坐标镜像回原图空间
+            val mirroredDetections = flipDetections.map { det ->
+                // 先从letterbox空间转到翻转图的像素空间
+                val pixelX = (det.x - flipPadX) / flipScale
+                val pixelY = (det.y - flipPadY) / flipScale
+                val pixelW = det.width / flipScale
+                val pixelH = det.height / flipScale
+                // 水平镜像：x' = imgW - x
+                val mirroredPixelX = imgW - pixelX
+                // 转回letterbox空间（用原图的letterbox参数）
+                val lbX = mirroredPixelX * origScale + origPadX
+                val lbY = pixelY * origScale + origPadY
+                val lbW = pixelW * origScale
+                val lbH = pixelH * origScale
+                det.copy(x = lbX, y = lbY, width = lbW, height = lbH)
+            }
+            allDetections.addAll(mirroredDetections)
+            DetectionLogger.log(DetectionLogger.Level.INFO, "TTA: 翻转检测到 ${flipDetections.size} 个候选框")
+        } finally {
+            flippedBitmap.recycle()
+        }
+        
+        // ===== 3. 轻微旋转(+5°)推理 =====
+        DetectionLogger.log(DetectionLogger.Level.INFO, "TTA: 旋转+5°推理...")
+        val rotAngle = 5f
+        val radians = Math.toRadians(rotAngle.toDouble())
+        val cosA = Math.cos(radians).toFloat()
+        val sinA = Math.sin(radians).toFloat()
+        val rotMatrix = Matrix().apply { postRotate(rotAngle, bitmap.width / 2f, bitmap.height / 2f) }
+        // 计算旋转后的边界尺寸
+        val rotRect = android.graphics.RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
+        rotMatrix.mapRect(rotRect)
+        val rotW = rotRect.width().toInt()
+        val rotH = rotRect.height().toInt()
+        // 调整矩阵使旋转后的图片居中
+        val adjustedRotMatrix = Matrix().apply {
+            postRotate(rotAngle, bitmap.width / 2f, bitmap.height / 2f)
+            postTranslate(-rotRect.left, -rotRect.top)
+        }
+        val rotatedBitmap = Bitmap.createBitmap(rotW, rotH, Bitmap.Config.ARGB_8888)
+        val rotCanvas = android.graphics.Canvas(rotatedBitmap)
+        rotCanvas.drawBitmap(bitmap, adjustedRotMatrix, null)
+        try {
+            val rotBuffer = preprocessImage(rotatedBitmap)
+            val rotScale = letterboxScale
+            val rotPadX = letterboxPadX
+            val rotPadY = letterboxPadY
+            val rotDetections = runInference(rotBuffer)
+            
+            // 将旋转图的检测框坐标逆旋转回原图空间
+            val cx = bitmap.width / 2f
+            val cy = bitmap.height / 2f
+            val offsetX = -rotRect.left
+            val offsetY = -rotRect.top
+            
+            val unrotatedDetections = rotDetections.map { det ->
+                // 从letterbox空间转到旋转图的像素空间
+                val rpx = (det.x - rotPadX) / rotScale
+                val rpy = (det.y - rotPadY) / rotScale
+                val rpw = det.width / rotScale
+                val rph = det.height / rotScale
+                // 撤销平移偏移
+                val shiftedX = rpx - offsetX
+                val shiftedY = rpy - offsetY
+                // 逆旋转（绕原图中心）
+                val dx = shiftedX - cx
+                val dy = shiftedY - cy
+                val origPixelX = dx * cosA + dy * sinA + cx  // 逆旋转: cos(+a), sin(+a)
+                val origPixelY = -dx * sinA + dy * cosA + cy
+                val origPixelW = rpw  // 宽高近似不变（5°旋转影响极小）
+                val origPixelH = rph
+                // 转回letterbox空间
+                val lbX = origPixelX * origScale + origPadX
+                val lbY = origPixelY * origScale + origPadY
+                val lbW = origPixelW * origScale
+                val lbH = origPixelH * origScale
+                det.copy(x = lbX, y = lbY, width = lbW, height = lbH)
+            }
+            allDetections.addAll(unrotatedDetections)
+            DetectionLogger.log(DetectionLogger.Level.INFO, "TTA: 旋转检测到 ${rotDetections.size} 个候选框")
+        } finally {
+            rotatedBitmap.recycle()
+        }
+        
+        // ===== 恢复原图的letterbox参数 =====
+        letterboxScale = origScale
+        letterboxPadX = origPadX
+        letterboxPadY = origPadY
+        
+        DetectionLogger.log(DetectionLogger.Level.INFO, 
+            "TTA: 合并前共 ${allDetections.size} 个候选框，开始NMS去重...")
+        
+        // 合并后做一次NMS去重
+        val mergedDetections = applyNMS(allDetections)
+        DetectionLogger.log(DetectionLogger.Level.INFO, 
+            "TTA: NMS去重后 ${mergedDetections.size} 个检测框")
+        
+        return mergedDetections
     }
     
     /**

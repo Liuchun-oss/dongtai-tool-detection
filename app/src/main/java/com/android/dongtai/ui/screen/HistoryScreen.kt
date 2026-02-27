@@ -1,20 +1,30 @@
 package com.android.dongtai.ui.screen
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PendingActions
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.android.dongtai.R
 import com.android.dongtai.data.entity.WorkRecord
+import java.text.SimpleDateFormat
+import java.util.*
 
 /**
  * 历史记录界面
@@ -30,12 +40,15 @@ fun HistoryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.history)) },
+                title = { Text(stringResource(R.string.history), fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Text(stringResource(R.string.back))
+                        Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
-                }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
             )
         }
     ) { paddingValues ->
@@ -79,65 +92,94 @@ fun HistoryRecordItem(
     onDelete: () -> Unit
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
+    val isCompleted = workRecord.isCompleted()
+    val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
     
     Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // 左侧状态图标
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        if (isCompleted) Color(0xFF4CAF50).copy(alpha = 0.12f)
+                        else MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f)
+                    ),
+                contentAlignment = Alignment.Center
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Icon(
+                    imageVector = if (isCompleted) Icons.Default.CheckCircle else Icons.Default.PendingActions,
+                    contentDescription = null,
+                    tint = if (isCompleted) Color(0xFF4CAF50) else MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+            
+            Spacer(modifier = Modifier.width(14.dp))
+            
+            // 中间信息
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = workRecord.getDisplayName(),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                if (workRecord.beforeRecord.workGroup.isNotBlank() || 
+                    workRecord.beforeRecord.workLocation.isNotBlank()) {
+                    val info = listOfNotNull(
+                        workRecord.beforeRecord.workGroup.takeIf { it.isNotBlank() },
+                        workRecord.beforeRecord.workLocation.takeIf { it.isNotBlank() }
+                    ).joinToString(" · ")
                     Text(
-                        text = workRecord.getDisplayName(),
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
+                        text = info,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    if (workRecord.beforeRecord.workGroup.isNotBlank() || 
-                        workRecord.beforeRecord.workLocation.isNotBlank()) {
-                        val info = listOfNotNull(
-                            workRecord.beforeRecord.workGroup.takeIf { it.isNotBlank() },
-                            workRecord.beforeRecord.workLocation.takeIf { it.isNotBlank() }
-                        ).joinToString(" | ")
-                        Text(
-                            text = info,
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                    }
-                    if (workRecord.isCompleted()) {
-                        Text(
-                            text = "✓ 已完成",
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    } else {
-                        Text(
-                            text = "⏳ 作业中，未结束",
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.secondary
-                        )
-                    }
+                    Spacer(modifier = Modifier.height(2.dp))
                 }
                 
-                IconButton(
-                    onClick = { showDeleteDialog = true }
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = stringResource(R.string.delete)
-                    )
-                }
+                Text(
+                    text = dateFormat.format(Date(workRecord.beforeRecord.timestamp)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
             }
+            
+            // 右侧：删除 + 箭头
+            IconButton(
+                onClick = { showDeleteDialog = true },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = stringResource(R.string.delete),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            
+            Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
     

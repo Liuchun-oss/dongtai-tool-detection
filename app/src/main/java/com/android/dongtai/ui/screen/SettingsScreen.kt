@@ -1,8 +1,10 @@
 package com.android.dongtai.ui.screen
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -12,6 +14,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -51,20 +55,27 @@ fun SettingsScreen(
     
     Scaffold(
         topBar = {
-            TopAppBar(
+            LargeTopAppBar(
                 title = { 
-                    Text(
-                        "设置",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Column {
+                        Text(
+                            "设置",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "自定义检测参数与界面偏好",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
+                colors = TopAppBarDefaults.largeTopAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
                 )
             )
@@ -82,6 +93,7 @@ fun SettingsScreen(
             // 对比方式 - 放在最上面
             SettingsCard(
                 title = "对比方式",
+                subtitle = "选择工具清点的对比策略",
                 icon = Icons.Default.CompareArrows,
                 iconColor = MaterialTheme.colorScheme.tertiary
             ) {
@@ -109,6 +121,7 @@ fun SettingsScreen(
             // 核心设置 - 检测参数
             SettingsCard(
                 title = "检测参数",
+                subtitle = "调整AI识别的灵敏度与精度",
                 icon = Icons.Default.Tune,
                 iconColor = MaterialTheme.colorScheme.primary
             ) {
@@ -165,6 +178,7 @@ fun SettingsScreen(
             // 功能设置
             SettingsCard(
                 title = "功能设置",
+                subtitle = "控制识别行为与显示选项",
                 icon = Icons.Default.Settings,
                 iconColor = MaterialTheme.colorScheme.secondary
             ) {
@@ -206,6 +220,7 @@ fun SettingsScreen(
             // 界面设置
             SettingsCard(
                 title = "界面设置",
+                subtitle = "个性化外观与显示",
                 icon = Icons.Default.Palette,
                 iconColor = MaterialTheme.colorScheme.primary
             ) {
@@ -346,18 +361,19 @@ fun SettingsScreen(
 }
 
 /**
- * 设置卡片容器
+ * 设置卡片容器（高端版）
  */
 @Composable
 fun SettingsCard(
     title: String,
+    subtitle: String? = null,
     icon: ImageVector,
     iconColor: androidx.compose.ui.graphics.Color,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
         ),
@@ -369,25 +385,38 @@ fun SettingsCard(
             // 标题栏
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
+                // 图标带渐变背景
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(iconColor.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
-                        modifier = Modifier.size(24.dp),
+                        modifier = Modifier.size(22.dp),
                         tint = iconColor
                     )
-                    Spacer(modifier = Modifier.width(12.dp))
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
                     Text(
                         text = title,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
+                    if (subtitle != null) {
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
                 }
             }
             

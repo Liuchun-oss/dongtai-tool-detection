@@ -1,6 +1,5 @@
 package com.android.dongtai.ui.theme
 
-import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -12,29 +11,54 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import com.android.dongtai.utils.SettingsState
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+    primary = Blue80,
+    onPrimary = Blue10,
+    primaryContainer = Blue30,
+    onPrimaryContainer = Blue90,
+    secondary = Orange80,
+    onSecondary = Orange40,
+    secondaryContainer = Color(0xFF3D2E1A),
+    onSecondaryContainer = Orange90,
+    tertiary = Green80,
+    onTertiary = Green50,
+    background = Color(0xFF0E1117),
+    onBackground = Color(0xFFE3E3E8),
+    surface = Color(0xFF161B22),
+    onSurface = Color(0xFFE3E3E8),
+    surfaceVariant = Color(0xFF1E2430),
+    onSurfaceVariant = Color(0xFFBFC6D4),
+    error = Red80,
+    onError = Red50,
+    errorContainer = Color(0xFF3B1010),
+    onErrorContainer = Red80
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
+    primary = Blue40,
     onPrimary = Color.White,
+    primaryContainer = Blue90,
+    onPrimaryContainer = Blue20,
+    secondary = Orange50,
     onSecondary = Color.White,
+    secondaryContainer = Orange90,
+    onSecondaryContainer = Orange40,
+    tertiary = Green50,
     onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+    background = Color(0xFFF8F9FC),
+    onBackground = Gray10,
+    surface = Color.White,
+    onSurface = Gray10,
+    surfaceVariant = Color(0xFFEEF1F8),
+    onSurfaceVariant = Gray30,
+    error = Red50,
+    onError = Color.White,
+    errorContainer = Red90,
+    onErrorContainer = Red50
 )
 
 // 字体大小比例
@@ -43,13 +67,11 @@ val LocalFontScale = compositionLocalOf { 1.0f }
 @Composable
 fun DongtaiTheme(
     darkTheme: Boolean? = null,
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
     
-    // 从设置读取主题模式和字体大小（使用 SettingsState 实时监听变化）
     val themeMode = SettingsState.rememberThemeMode()
     val fontSize = SettingsState.rememberFontSize()
     
@@ -57,7 +79,7 @@ fun DongtaiTheme(
         darkTheme != null -> darkTheme
         themeMode == "dark" -> true
         themeMode == "light" -> false
-        else -> isSystemInDarkTheme() // 跟随系统
+        else -> isSystemInDarkTheme()
     }
     
     val fontScale = when (fontSize) {
@@ -68,7 +90,6 @@ fun DongtaiTheme(
         else -> 1.0f
     }
     
-    // 创建自定义 Typography（应用字体大小）
     val customTypography = remember(fontScale) {
         Typography.copy(
             displayLarge = Typography.displayLarge.copy(fontSize = Typography.displayLarge.fontSize * fontScale),
@@ -93,16 +114,15 @@ fun DongtaiTheme(
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             if (actualDarkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
-
         actualDarkTheme -> DarkColorScheme
         else -> LightColorScheme
     }
 
     CompositionLocalProvider(LocalFontScale provides fontScale) {
-    MaterialTheme(
-        colorScheme = colorScheme,
+        MaterialTheme(
+            colorScheme = colorScheme,
             typography = customTypography,
-        content = content
-    )
+            content = content
+        )
     }
 }

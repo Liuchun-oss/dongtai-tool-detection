@@ -83,11 +83,11 @@ class ToolRecordViewModel(application: Application) : AndroidViewModel(applicati
                 // 如果是作业后记录，需要找到对应的作业前记录进行对比
                 val beforeRecord = getLatestBeforeRecord()
                 if (beforeRecord != null) {
-                    // 识别作业后的工具，传入作业前的工具列表JSON，确保作业后的结果不超过作业前
+                    // 识别作业后的工具（纯识别，不传beforeToolsJson，对比逻辑统一在compareToolsByMode里做）
                     // 继承作业前记录的作业组和作业地点
                     val afterToolsJson = detectionService.detectTools(
                         record.imagePath,
-                        beforeRecord.toolsJson
+                        null
                     )
                     val updatedRecord = record.copy(
                         toolsJson = afterToolsJson,

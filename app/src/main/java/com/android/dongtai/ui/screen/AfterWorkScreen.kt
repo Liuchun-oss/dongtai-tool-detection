@@ -41,6 +41,7 @@ import com.android.dongtai.R
 import com.android.dongtai.data.entity.ToolRecord
 import com.android.dongtai.data.entity.WorkRecord
 import com.android.dongtai.service.OnnxToolDetectionService
+import com.android.dongtai.utils.DetectionHelper
 import com.android.dongtai.utils.DetectionLogger
 import com.android.dongtai.utils.SettingsManager
 import com.android.dongtai.ui.viewmodel.ToolRecordViewModel
@@ -135,7 +136,6 @@ fun AfterWorkScreen(
     // 识别工具（检查自动识别设置）
     LaunchedEffect(afterImagePath, triggerRecognition) {
         if (afterImagePath != null && !isDetecting) {
-            // 检查自动识别设置
             val autoRecognition = SettingsManager.getAutoRecognition(context)
             if (!autoRecognition) {
                 DetectionLogger.log(DetectionLogger.Level.INFO, "自动识别已关闭（设置中），跳过识别")
@@ -146,130 +146,29 @@ fun AfterWorkScreen(
             detectedCount = 0
             missingTools = emptyList()
             
-            // 删除旧的标注图片（如果存在）
-            val annotatedPath = afterImagePath!!.replace(".jpg", "_annotated.jpg")
-            val annotatedFile = File(annotatedPath)
-            if (annotatedFile.exists()) {
-                annotatedFile.delete()
-                DetectionLogger.log(DetectionLogger.Level.INFO, "删除旧的标注图片")
-            }
+            val result = DetectionHelper.detectTools(context, afterImagePath!!, useTTA = isReRecognizing)
             
-            // 传入作业前的工具列表JSON，确保作业后的结果不超过作业前
-            val detectionService = OnnxToolDetectionService.getInstance(context)
+            afterToolsJson = result.toolsJson
+            detectedCount = result.detectedCount
             
-            // 如果是重新识别，更大幅度地降低置信度阈值，尝试检测到更多工具
-            val toolsJson = if (isReRecognizing) {
-                val baseConfidence = SettingsManager.getConfidenceThreshold(context)
-                val baseIou = SettingsManager.getIouThreshold(context)
-                
-                // 重新识别时：更大幅度地降低置信度阈值（降低0.1-0.15），尝试检测到更多工具
-                // 这样可以检测到置信度较低但可能正确的工具（比如螺丝刀被误识别为扳手的情况）
-                val confidenceReduction = kotlin.random.Random.nextFloat() * 0.05f + 0.1f // 降低0.1-0.15
-                val adjustedConfidence = (baseConfidence - confidenceReduction).coerceAtLeast(0.1f)
-                
-                // IOU阈值稍微降低，避免过度过滤
-                val iouReduction = kotlin.random.Random.nextFloat() * 0.05f + 0.05f // 降低0.05-0.1
-                val adjustedIou = (baseIou - iouReduction).coerceAtLeast(0.2f)
-                
-                DetectionLogger.log(
-                    DetectionLogger.Level.INFO,
-                    "重新识别：大幅降低阈值以检测更多工具 - 置信度 ${String.format("%.3f", baseConfidence)} -> ${String.format("%.3f", adjustedConfidence)} (降低${String.format("%.3f", confidenceReduction)}), IOU ${String.format("%.3f", baseIou)} -> ${String.format("%.3f", adjustedIou)}"
-                )
-                
-                detectionService.detectTools(
-                    afterImagePath!!,
-                    beforeRecord.toolsJson,
-                    overrideConfidenceThreshold = adjustedConfidence,
-                    overrideIouThreshold = adjustedIou
-                )
-            } else {
-                detectionService.detectTools(
-                    afterImagePath!!, 
-                    beforeRecord.toolsJson
-                )
-            }
+            DetectionLogger.log(DetectionLogger.Level.INFO, "AfterWorkScreen - detectedCount: $detectedCount")
             
-            afterToolsJson = toolsJson // 保存工具JSON
-            
-            // 根据对比模式解析工具数量
-            val comparisonMode = SettingsManager.getComparisonMode(context)
-            detectedCount = if (comparisonMode == "specific_tools" && toolsJson != null) {
-                // 具体工具数量对比模式：从工具列表解析
-                try {
-                    val toolsList = OnnxToolDetectionService.parseToolsJson(toolsJson)
-                    toolsList.sumOf { tool ->
-                        val parts = tool.split("*")
-                        if (parts.size == 2) {
-                            // 移除状态信息（"已存在"或"未找到"）
-                            val countPart = parts[1].trim().split(" ")[0]
-                            countPart.toIntOrNull() ?: 0
-                        } else {
-                            0
-                        }
-                    }
-                } catch (e: Exception) {
-                    // 解析失败，使用parseToolCount
-                    DetectionLogger.log(DetectionLogger.Level.WARN, "解析工具列表失败，使用parseToolCount: ${e.message}")
-                    OnnxToolDetectionService.parseToolCount(toolsJson)
-                }
-            } else {
-                // 总数量对比模式：使用parseToolCount
-                OnnxToolDetectionService.parseToolCount(toolsJson)
-            }
-            
-            DetectionLogger.log(DetectionLogger.Level.INFO, "AfterWorkScreen - 解析作业后工具数量 - comparisonMode: $comparisonMode, toolsJson: $toolsJson, detectedCount: $detectedCount")
-            
-            // 计算对比结果（缺失的工具）- 根据设置选择对比方式
-            missingTools = OnnxToolDetectionService.compareToolsByMode(context, beforeRecord.toolsJson, toolsJson)
+            // 计算对比结果（缺失的工具）
+            missingTools = OnnxToolDetectionService.compareToolsByMode(context, beforeRecord.toolsJson, result.toolsJson ?: "")
             isDetecting = false
-            isReRecognizing = false // 重置标记
+            isReRecognizing = false
             
-            // 识别完成后，自动切换到作业后照片页面（如果还在作业前页面）
+            // 识别完成后，自动切换到作业后照片页面
             scope.launch {
                 kotlinx.coroutines.delay(100)
                 try {
                     if (pagerState.currentPage == 0 && imagePaths.size > 1) {
                         pagerState.animateScrollToPage(1)
                     }
-                } catch (e: Exception) {
-                    // 忽略错误
-                }
+                } catch (_: Exception) {}
             }
             
-            // 反馈设置：震动和声音
-            val vibrationFeedback = SettingsManager.getVibrationFeedback(context)
-            val soundFeedback = SettingsManager.getSoundFeedback(context)
-            
-            if (vibrationFeedback) {
-                // 震动反馈
-                try {
-                    val vibrator = context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? android.os.Vibrator
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                        vibrator?.vibrate(android.os.VibrationEffect.createOneShot(100, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
-                    } else {
-                        @Suppress("DEPRECATION")
-                        vibrator?.vibrate(100)
-                    }
-                } catch (e: Exception) {
-                    DetectionLogger.log(DetectionLogger.Level.WARN, "震动反馈失败: ${e.message}")
-                }
-            }
-            
-            if (soundFeedback) {
-                // 声音反馈（使用系统通知音）
-                try {
-                    val notification = android.app.Notification.Builder(context, "detection_channel")
-                        .setSound(android.provider.Settings.System.DEFAULT_NOTIFICATION_URI)
-                        .build()
-                    // 这里只是示例，实际可以使用 MediaPlayer 播放声音
-                } catch (e: Exception) {
-                    DetectionLogger.log(DetectionLogger.Level.WARN, "声音反馈失败: ${e.message}")
-                }
-            }
-            // 识别完成后，自动切换到作业后照片页面
-            if (pagerState.currentPage == 0) {
-                pagerState.animateScrollToPage(1)
-            }
+            DetectionHelper.triggerFeedback(context)
         }
     }
     
@@ -769,7 +668,7 @@ fun AfterWorkScreen(
                     .padding(24.dp),
                 enabled = afterImagePath != null &&
                          !isDetecting &&
-                         detectedCount > 0
+                         afterToolsJson != null
             ) {
                 Text("提交保存", style = MaterialTheme.typography.bodyLarge)
             }
@@ -794,63 +693,129 @@ fun AfterWorkScreen(
             )
         }
         
-        // 纠错确认对话框
+        // 纠错对话框（逐个工具纠错）
         if (showCorrectionDialog) {
+            // 解析当前缺失的工具列表
+            val currentMissing = if (afterToolsJson != null) {
+                OnnxToolDetectionService.compareToolsByMode(context, beforeRecord.toolsJson, afterToolsJson!!)
+            } else { emptyList() }
+            
+            // 每个缺失工具的纠错状态（true = 用户确认没丢）
+            var correctionStates by remember(showCorrectionDialog) {
+                mutableStateOf(currentMissing.associateWith { false })
+            }
+            
             AlertDialog(
                 onDismissRequest = { showCorrectionDialog = false },
                 title = {
                     Text(
-                        text = "纠错确认",
+                        text = "工具纠错",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
                 },
                 text = {
-                    Text(
-                        text = "是否为AI识别错误？实际未发生工具丢失的情况！",
-                        style = MaterialTheme.typography.bodyLarge
-                    )
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "以下工具被AI判定为缺失，请勾选实际未丢失的工具：",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        currentMissing.forEach { tool ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        correctionStates = correctionStates.toMutableMap().apply {
+                                            put(tool, !(get(tool) ?: false))
+                                        }
+                                    }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = correctionStates[tool] ?: false,
+                                    onCheckedChange = { checked ->
+                                        correctionStates = correctionStates.toMutableMap().apply {
+                                            put(tool, checked)
+                                        }
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "$tool（实际未丢失）",
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                            }
+                        }
+                    }
                 },
                 confirmButton = {
                     Button(
                         onClick = {
-                            // 纠错：将所有工具标记为"已存在"
-                            if (beforeCount > 0) {
+                            // 应用纠错：把用户勾选的工具加回作业后的工具列表
+                            val correctedTools = correctionStates.filter { it.value }.keys
+                            if (correctedTools.isNotEmpty() && afterToolsJson != null) {
                                 if (comparisonMode == "specific_tools") {
-                                    // 具体工具数量对比：将所有作业前的工具标记为"已存在"
-                                    val correctedToolsList = beforeToolsList.map { tool ->
-                                        val parts = tool.split("*")
+                                    // 解析当前作业后工具列表
+                                    val afterList = try {
+                                        OnnxToolDetectionService.parseToolsJson(afterToolsJson!!).toMutableList()
+                                    } catch (e: Exception) { mutableListOf() }
+                                    
+                                    // 把纠错的工具加回去
+                                    correctedTools.forEach { missingTool ->
+                                        val parts = missingTool.split("*")
                                         if (parts.size == 2) {
                                             val toolName = parts[0]
-                                            val count = parts[1].toIntOrNull() ?: 1
-                                            "$toolName*$count 已存在"
-                                        } else {
-                                            "$tool 已存在"
+                                            val missingCount = parts[1].toIntOrNull() ?: 0
+                                            // 查找是否已有该工具
+                                            val existingIdx = afterList.indexOfFirst { it.startsWith("$toolName*") }
+                                            if (existingIdx >= 0) {
+                                                val existParts = afterList[existingIdx].split("*")
+                                                val existCount = existParts.getOrNull(1)?.toIntOrNull() ?: 0
+                                                afterList[existingIdx] = "$toolName*${existCount + missingCount}"
+                                            } else {
+                                                afterList.add("$toolName*$missingCount")
+                                            }
                                         }
                                     }
-                                    afterToolsJson = OnnxToolDetectionService.toolsToJson(correctedToolsList)
-                                    detectedCount = beforeCount
-                                    DetectionLogger.log(DetectionLogger.Level.INFO, "纠错：将所有工具标记为已存在 - $correctedToolsList")
+                                    
+                                    afterToolsJson = OnnxToolDetectionService.toolsToJson(afterList)
+                                    detectedCount = afterList.sumOf { t ->
+                                        val p = t.split("*")
+                                        if (p.size == 2) p[1].toIntOrNull() ?: 0 else 0
+                                    }
                                 } else {
-                                    // 总数量对比：直接设置数量
-                                    detectedCount = beforeCount
+                                    // 总数量模式：加回纠错的数量
+                                    val addBack = correctedTools.sumOf { t ->
+                                        val p = t.split("*")
+                                        if (p.size == 2) p[1].toIntOrNull() ?: 0 else 1
+                                    }
+                                    detectedCount += addBack
                                     afterToolsJson = OnnxToolDetectionService.toolCountToJson(detectedCount)
-                                    DetectionLogger.log(DetectionLogger.Level.INFO, "纠错：设置作业后数量为作业前数量 - $detectedCount")
                                 }
-                                // 重新计算对比结果（应该为空）
-                                missingTools = OnnxToolDetectionService.compareToolsByMode(context, beforeRecord.toolsJson, afterToolsJson!!)
-                                DetectionLogger.log(DetectionLogger.Level.INFO, "纠错后对比结果: $missingTools")
+                                
+                                // 重新计算对比结果
+                                missingTools = OnnxToolDetectionService.compareToolsByMode(
+                                    context, beforeRecord.toolsJson, afterToolsJson!!
+                                )
+                                DetectionLogger.log(DetectionLogger.Level.INFO, 
+                                    "纠错完成：纠正了 ${correctedTools.size} 个工具，剩余缺失: $missingTools")
                             }
-                            
                             showCorrectionDialog = false
                         }
                     ) {
-                        Text("是")
+                        Text("确认纠错")
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { showCorrectionDialog = false }) {
-                        Text("否")
+                        Text("取消")
                     }
                 }
             )

@@ -45,7 +45,7 @@ object SettingsManager {
     
     // 检测相关设置
     fun getConfidenceThreshold(context: Context): Float {
-        return getPrefs(context).getFloat(KEY_CONFIDENCE_THRESHOLD, 0.25f)
+        return getPrefs(context).getFloat(KEY_CONFIDENCE_THRESHOLD, 0.35f)
     }
     
     fun setConfidenceThreshold(context: Context, value: Float) {
@@ -53,7 +53,7 @@ object SettingsManager {
     }
     
     fun getIouThreshold(context: Context): Float {
-        return getPrefs(context).getFloat(KEY_IOU_THRESHOLD, 0.45f)
+        return getPrefs(context).getFloat(KEY_IOU_THRESHOLD, 0.50f)
     }
     
     fun setIouThreshold(context: Context, value: Float) {
@@ -254,7 +254,7 @@ object SettingsManager {
     
     // 对比方式设置
     fun getComparisonMode(context: Context): String {
-        return getPrefs(context).getString(KEY_COMPARISON_MODE, "total_count") ?: "total_count"
+        return getPrefs(context).getString(KEY_COMPARISON_MODE, "specific_tools") ?: "specific_tools"
     }
     
     fun setComparisonMode(context: Context, value: String) {
