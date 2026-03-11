@@ -15,8 +15,8 @@ android {
         applicationId = "com.android.dongtai"
         minSdk = 29
         targetSdk = 36
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 6
+        versionName = "2.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
