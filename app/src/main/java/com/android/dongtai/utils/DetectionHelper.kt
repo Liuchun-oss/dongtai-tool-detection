@@ -35,7 +35,8 @@ object DetectionHelper {
     suspend fun detectTools(
         context: Context,
         imagePath: String,
-        useTTA: Boolean = false
+        useTTA: Boolean = false,
+        phase: String = "unknown"
     ): DetectionResult {
         // 删除旧的标注图片
         val annotatedPath = imagePath.replace(".jpg", "_annotated.jpg")

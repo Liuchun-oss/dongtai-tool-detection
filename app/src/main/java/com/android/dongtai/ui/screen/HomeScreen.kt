@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.android.dongtai.R
 import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.launch
 
 /**
  * 首页界面 — 卡片式布局
@@ -38,6 +39,25 @@ fun HomeScreen(
     onLogViewerClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    var showUpdateDialog by remember { mutableStateOf(false) }
+    var updateInfo by remember { mutableStateOf<com.android.dongtai.utils.UpdateManager.UpdateInfo?>(null) }
+    var isDownloading by remember { mutableStateOf(false) }
+    var downloadProgress by remember { mutableStateOf(0f) }
+    var downloadedMB by remember { mutableStateOf("0") }
+    var totalMB by remember { mutableStateOf("0") }
+    var downloadDone by remember { mutableStateOf(false) }
+    var downloadError by remember { mutableStateOf<String?>(null) }
+
+    // 启动时检查更新
+    LaunchedEffect(Unit) {
+        val info = com.android.dongtai.utils.UpdateManager.checkUpdate(context)
+        if (info != null) {
+            updateInfo = info
+            showUpdateDialog = true
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -74,6 +94,130 @@ fun HomeScreen(
             onAfterWorkClick = onAfterWorkClick,
             onHistoryClick = onHistoryClick,
             onLogViewerClick = onLogViewerClick
+        )
+    }
+
+    // 更新提示对话框（带下载进度）
+    if (showUpdateDialog && updateInfo != null) {
+        val scope = rememberCoroutineScope()
+        AlertDialog(
+            onDismissRequest = {
+                if (!updateInfo!!.forceUpdate && !isDownloading) showUpdateDialog = false
+            },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.SystemUpdate,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(32.dp)
+                )
+            },
+            title = {
+                Text(
+                    if (downloadError != null) "下载失败"
+                    else if (downloadDone) "下载完成"
+                    else if (isDownloading) "正在下载..."
+                    else "发现新版本 v${updateInfo!!.versionName}"
+                )
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    if (downloadError != null) {
+                        Text(
+                            text = downloadError!!,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    } else if (!isDownloading && !downloadDone) {
+                        // 更新信息
+                        if (updateInfo!!.changelog.isNotEmpty()) {
+                            Text(
+                                text = updateInfo!!.changelog,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        Text(
+                            text = "安装包大小: ${updateInfo!!.apkSize / 1024 / 1024}MB",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    } else {
+                        // 下载进度
+                        LinearProgressIndicator(
+                            progress = { downloadProgress },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "${downloadedMB}MB / ${totalMB}MB",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                            Text(
+                                text = "${(downloadProgress * 100).toInt()}%",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (downloadDone) {
+                        Button(onClick = {
+                            com.android.dongtai.utils.UpdateManager.installApk(context)
+                        }) { Text("立即安装") }
+                    } else if (!isDownloading) {
+                        Button(onClick = {
+                            downloadError = null
+                            isDownloading = true
+                            scope.launch {
+                                val success = com.android.dongtai.utils.UpdateManager.downloadApkWithProgress(context) { dl, total ->
+                                    if (total > 0) {
+                                        downloadProgress = dl.toFloat() / total.toFloat()
+                                        downloadedMB = "${dl / 1024 / 1024}"
+                                        totalMB = "${total / 1024 / 1024}"
+                                    }
+                                }
+                                isDownloading = false
+                                if (success) {
+                                    downloadDone = true
+                                } else {
+                                    downloadError = "下载失败，请检查网络"
+                                }
+                            }
+                        }) {
+                            Text(if (downloadError != null) "重试" else "立即更新")
+                        }
+                    }
+                    // 用浏览器下载：应用内安装失败或旧版本用户可用此方式手动安装
+                    TextButton(onClick = {
+                        com.android.dongtai.utils.UpdateManager.openUpdateDownloadInBrowser(context)
+                    }) {
+                        Text("用浏览器下载")
+                    }
+                }
+            },
+            dismissButton = {
+                if (!isDownloading && !downloadDone && !updateInfo!!.forceUpdate) {
+                    TextButton(onClick = { showUpdateDialog = false }) {
+                        Text("稍后再说")
+                    }
+                }
+            }
         )
     }
 }
@@ -152,8 +296,8 @@ private fun HomeContent(
         val context = LocalContext.current
         val versionName = remember {
             try {
-                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "2.0"
-            } catch (_: Exception) { "2.0" }
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "2.1"
+            } catch (_: Exception) { "2.1" }
         }
         Text(
             text = "v$versionName",

@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <external-files-path name="my_images" path="." />
+    <external-path name="downloads" path="Download/" />
+    <!-- 应用内更新 APK 使用，避免公共 Download 目录权限问题 -->
+    <external-cache-path name="apk_cache" path="." />
+    <cache-path name="apk_cache_internal" path="." />
 </paths>

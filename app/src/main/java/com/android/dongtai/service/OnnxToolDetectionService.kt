@@ -161,28 +161,33 @@ class OnnxToolDetectionService(private val context: Context) {
             val modelBytes = context.assets.open("best.onnx").use { it.readBytes() }
             DetectionLogger.log(DetectionLogger.Level.INFO, "模型文件大小: ${modelBytes.size / 1024 / 1024} MB")
             
-            // 创建会话选项
-            DetectionLogger.log(DetectionLogger.Level.INFO, "配置会话选项...")
-            val sessionOptions = OrtSession.SessionOptions().apply {
-                // 使用所有可用的优化
-                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                // 根据设置决定是否启用NNAPI加速
-                if (SettingsManager.getEnableNnapi(context)) {
-                    try {
-                        // 使用NNAPI加速（Android神经网络API）
-                        addNnapi()
-                        DetectionLogger.log(DetectionLogger.Level.INFO, "NNAPI加速已启用")
-                    } catch (e: Exception) {
-                        DetectionLogger.log(DetectionLogger.Level.WARN, "NNAPI加速不可用: ${e.message}")
-                    }
-                } else {
-                    DetectionLogger.log(DetectionLogger.Level.INFO, "NNAPI加速已禁用（设置中关闭）")
-                }
-            }
-            
-            // 创建推理会话
+            // 创建推理会话（先试 NNAPI，失败则回退到 CPU）
             DetectionLogger.log(DetectionLogger.Level.INFO, "创建推理会话...")
-            ortSession = ortEnvironment?.createSession(modelBytes, sessionOptions)
+            val useNnapi = SettingsManager.getEnableNnapi(context)
+            ortSession = if (useNnapi) {
+                try {
+                    val optsWithNnapi = OrtSession.SessionOptions().apply {
+                        setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                        addNnapi()
+                    }
+                    DetectionLogger.log(DetectionLogger.Level.INFO, "尝试使用NNAPI加速...")
+                    ortEnvironment?.createSession(modelBytes, optsWithNnapi).also {
+                        DetectionLogger.log(DetectionLogger.Level.INFO, "NNAPI加速已启用")
+                    }
+                } catch (e: Exception) {
+                    DetectionLogger.log(DetectionLogger.Level.WARN, "NNAPI创建会话失败，回退到CPU: ${e.message}")
+                    val optsCpu = OrtSession.SessionOptions().apply {
+                        setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                    }
+                    ortEnvironment?.createSession(modelBytes, optsCpu)
+                }
+            } else {
+                val optsCpu = OrtSession.SessionOptions().apply {
+                    setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                }
+                DetectionLogger.log(DetectionLogger.Level.INFO, "NNAPI已关闭，使用CPU")
+                ortEnvironment?.createSession(modelBytes, optsCpu)
+            }
             
             val duration = System.currentTimeMillis() - startTime
             DetectionLogger.logModelInit(true, duration)
@@ -950,7 +955,7 @@ class OnnxToolDetectionService(private val context: Context) {
         val results = session.run(mapOf(session.inputNames.first() to inputTensor))
         
         // 获取输出
-        // YOLOv8输出格式: [1, 28, 8400] -> [batch, num_classes+4, num_predictions]
+        // YOLOv8输出格式: [1, 32, 8400] -> [batch, num_classes+4, num_predictions]
         val outputTensor = results[0].value as Array<*>
         val output = outputTensor[0] as Array<FloatArray>
         
@@ -961,7 +966,7 @@ class OnnxToolDetectionService(private val context: Context) {
         // output[1] = [y, y, y, ...] 8400个y坐标
         // output[2] = [w, w, w, ...] 8400个宽度
         // output[3] = [h, h, h, ...] 8400个高度
-        // output[4-27] = 24个类别的置信度
+        // output[4-31] = 28个类别的置信度
         
         val numPredictions = output[0].size
         

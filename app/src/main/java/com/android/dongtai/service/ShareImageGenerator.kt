@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import androidx.exifinterface.media.ExifInterface
 import com.android.dongtai.data.entity.WorkRecord
 import com.android.dongtai.utils.SettingsManager
 import com.google.gson.Gson
@@ -166,16 +167,14 @@ object ShareImageGenerator {
     }
     
     /**
-     * 使用采样加载图片，减少内存占用
+     * 使用采样加载图片，减少内存占用，并校正EXIF旋转、统一横向显示
      */
     private fun loadBitmapWithSampling(imagePath: String): Bitmap {
-        // 先读取图片尺寸
         val options = BitmapFactory.Options().apply {
             inJustDecodeBounds = true
         }
         BitmapFactory.decodeFile(imagePath, options)
         
-        // 计算采样率（目标最大2048x2048）
         val maxSize = 2048
         val sampleSize = if (options.outWidth > maxSize || options.outHeight > maxSize) {
             val widthRatio = options.outWidth / maxSize
@@ -185,11 +184,43 @@ object ShareImageGenerator {
             1
         }
         
-        // 使用采样加载图片
         options.inJustDecodeBounds = false
         options.inSampleSize = sampleSize
-        return BitmapFactory.decodeFile(imagePath, options)
+        val rawBitmap = BitmapFactory.decodeFile(imagePath, options)
             ?: throw IllegalStateException("无法加载图片: $imagePath")
+        
+        // 读取EXIF旋转角度
+        val exifRotation = try {
+            val exif = ExifInterface(imagePath)
+            when (exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
+                ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                else -> 0f
+            }
+        } catch (e: Exception) {
+            0f
+        }
+        
+        // 应用EXIF旋转
+        val corrected = if (exifRotation != 0f) {
+            val matrix = Matrix().apply { postRotate(exifRotation) }
+            val rotated = Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
+            if (rotated != rawBitmap) rawBitmap.recycle()
+            rotated
+        } else {
+            rawBitmap
+        }
+        
+        // 如果图片是竖向的（高>宽），旋转90°变成横向
+        return if (corrected.height > corrected.width) {
+            val matrix = Matrix().apply { postRotate(90f) }
+            val landscape = Bitmap.createBitmap(corrected, 0, 0, corrected.width, corrected.height, matrix, true)
+            if (landscape != corrected) corrected.recycle()
+            landscape
+        } else {
+            corrected
+        }
     }
     
     /**
@@ -573,9 +604,9 @@ object ShareImageGenerator {
     private fun getVersionName(context: Context): String {
         return try {
             val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-            packageInfo.versionName ?: "2.0"
+            packageInfo.versionName ?: "2.1"
         } catch (e: Exception) {
-            "2.0"
+            "2.1"
         }
     }
 }

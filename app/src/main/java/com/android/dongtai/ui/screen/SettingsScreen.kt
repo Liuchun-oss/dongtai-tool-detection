@@ -90,6 +90,8 @@ fun SettingsScreen(
         ) {
             Spacer(modifier = Modifier.height(8.dp))
             
+            Spacer(modifier = Modifier.height(16.dp))
+            
             // 对比方式 - 放在最上面
             SettingsCard(
                 title = "对比方式",
@@ -624,3 +626,5 @@ fun ModernDropdown(
         }
     }
 }
+
+

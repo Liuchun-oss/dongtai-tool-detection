@@ -15,8 +15,8 @@ android {
         applicationId = "com.android.dongtai"
         minSdk = 29
         targetSdk = 36
-        versionCode = 6
-        versionName = "2.4"
+        versionCode = 18
+        versionName = "2.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -112,7 +112,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.6.1")
     
     // ONNX Runtime for AI inference
-    // 注意：当前模型使用Opset 22，需要重新导出为Opset 13
+    // 需使用 Opset ≤21 的 ONNX 模型，否则会报 ORT_INVALID_ARGUMENT（用 export_onnx_for_android.py 导出）
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.0")
     
     // ExifInterface for image rotation

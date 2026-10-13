@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -109,7 +110,9 @@ fun WorkInfoScreen(
     var manualCount by remember { mutableIntStateOf(0) } // 手动输入的数量
     var currentPhotoFile by remember { mutableStateOf<File?>(null) }
     var showFullScreenImage by remember { mutableStateOf(false) }
+    var showCategoriesDialog by remember { mutableStateOf(false) }
     var fullScreenImagePath by remember { mutableStateOf<String?>(null) }
+    var imageRefreshKey by remember { mutableIntStateOf(0) } // 识别完成后+1，触发图片刷新
     
     val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
     
@@ -171,7 +174,7 @@ fun WorkInfoScreen(
             isDetecting = true
             detectedCount = 0
             
-            val result = DetectionHelper.detectTools(context, imagePath!!, useTTA = isReRecognizing)
+            val result = DetectionHelper.detectTools(context, imagePath!!, useTTA = isReRecognizing, phase = "before")
             
             toolsJson = result.toolsJson
             detectedCount = result.detectedCount
@@ -181,6 +184,8 @@ fun WorkInfoScreen(
             
             isDetecting = false
             isReRecognizing = false
+            
+            imageRefreshKey++ // 触发图片刷新，显示标注后的图片
             
             DetectionHelper.triggerFeedback(context)
         }
@@ -206,6 +211,14 @@ fun WorkInfoScreen(
                 navigationIcon = {
                     IconButton(onClick = onCancel) {
                         Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.back))
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showCategoriesDialog = true }) {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = "查看可识别物件"
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -429,17 +442,22 @@ fun WorkInfoScreen(
                         }
                     } else {
                         // 显示预览图（优先显示带标注的图片）
+                        // imageRefreshKey 变化时触发重组，确保识别完成后能显示标注图
                         val annotatedPath = imagePath!!.replace(".jpg", "_annotated.jpg")
-                        val annotatedFile = File(annotatedPath)
-                        val imageFile = if (annotatedFile.exists()) annotatedFile else File(imagePath!!)
+                        val annotatedFile = remember(imagePath, imageRefreshKey) { File(annotatedPath) }
+                        val imageFile = remember(imagePath, imageRefreshKey) {
+                            if (File(annotatedPath).exists()) File(annotatedPath) else File(imagePath!!)
+                        }
                         
                         if (imageFile.exists()) {
                             Box(modifier = Modifier.fillMaxSize()) {
-                                // 图片区域（可点击）
+                                // 图片区域（可点击）— 用 imageRefreshKey 破缓存
                                 Image(
                                     painter = rememberAsyncImagePainter(
                                         ImageRequest.Builder(context)
                                             .data(imageFile)
+                                            .memoryCacheKey("${imageFile.absolutePath}_$imageRefreshKey")
+                                            .diskCacheKey("${imageFile.absolutePath}_$imageRefreshKey")
                                             .build()
                                     ),
                                     contentDescription = "工具照片",
@@ -1181,6 +1199,11 @@ fun WorkInfoScreen(
             }
         )
     }
+
+    // 可识别物件类别弹窗
+    if (showCategoriesDialog) {
+        CategoriesDialog(onDismiss = { showCategoriesDialog = false })
+    }
 }
 
 /**
@@ -1268,5 +1291,68 @@ fun FullScreenImageDialog(
             }
         }
     }
+}
+
+/**
+ * 可识别物件类别弹窗
+ * 展示模型能识别的全部工具类别
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CategoriesDialog(onDismiss: () -> Unit) {
+    val categories = listOf(
+        "扳手", "钳子", "内六角套装", "钥匙", "活口扳手", "螺丝刀", "毛刷",
+        "套筒扳手", "卷尺", "风机", "移动电源", "内六角", "定标仪", "计时器",
+        "口哨", "对讲机", "防护旗", "手灯", "黑体2", "万用表", "磁钢尺",
+        "喷壶", "收纳箱", "标签", "探头1", "电子标签", "风机2", "黑体"
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                "可识别物件（${categories.size}类）",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                categories.forEachIndexed { index, name ->
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "${index + 1}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = name,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭")
+            }
+        }
+    )
 }
 

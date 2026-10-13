@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
@@ -117,7 +118,9 @@ fun AfterWorkScreen(
     var triggerRecognition by remember { mutableIntStateOf(0) }
     var isReRecognizing by remember { mutableStateOf(false) } // 标记是否为重新识别
     var showFullScreenImage by remember { mutableStateOf(false) }
+    var showCategoriesDialog by remember { mutableStateOf(false) }
     var fullScreenImagePath by remember { mutableStateOf<String?>(null) }
+    var imageRefreshKey by remember { mutableIntStateOf(0) }
     
     val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
     val scope = rememberCoroutineScope()
@@ -146,7 +149,7 @@ fun AfterWorkScreen(
             detectedCount = 0
             missingTools = emptyList()
             
-            val result = DetectionHelper.detectTools(context, afterImagePath!!, useTTA = isReRecognizing)
+            val result = DetectionHelper.detectTools(context, afterImagePath!!, useTTA = isReRecognizing, phase = "after")
             
             afterToolsJson = result.toolsJson
             detectedCount = result.detectedCount
@@ -157,6 +160,8 @@ fun AfterWorkScreen(
             missingTools = OnnxToolDetectionService.compareToolsByMode(context, beforeRecord.toolsJson, result.toolsJson ?: "")
             isDetecting = false
             isReRecognizing = false
+            
+            imageRefreshKey++
             
             // 识别完成后，自动切换到作业后照片页面
             scope.launch {
@@ -224,7 +229,12 @@ fun AfterWorkScreen(
                     }
                 },
                 actions = {
-                    // 已移除分享功能
+                    IconButton(onClick = { showCategoriesDialog = true }) {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = "查看可识别物件"
+                        )
+                    }
                 }
             )
         }
@@ -283,18 +293,21 @@ fun AfterWorkScreen(
                             modifier = Modifier.fillMaxSize()
                         ) { page ->
                             val imagePath = imagePaths[page]
-                            // 优先显示带标注的图片
+                            // 优先显示带标注的图片（imageRefreshKey 变化时重新检查）
                             val annotatedPath = imagePath.replace(".jpg", "_annotated.jpg")
-                            val annotatedFile = File(annotatedPath)
-                            val imageFile = if (annotatedFile.exists()) annotatedFile else File(imagePath)
+                            val imageFile = remember(imagePath, imageRefreshKey) {
+                                if (File(annotatedPath).exists()) File(annotatedPath) else File(imagePath)
+                            }
                             
                             Box(modifier = Modifier.fillMaxSize()) {
                                 if (imageFile.exists()) {
-                                    // 图片区域（可点击）
+                                    // 图片区域（可点击）— 用 imageRefreshKey 破缓存
                                     Image(
                                         painter = rememberAsyncImagePainter(
                                             ImageRequest.Builder(context)
                                                 .data(imageFile)
+                                                .memoryCacheKey("${imageFile.absolutePath}_$imageRefreshKey")
+                                                .diskCacheKey("${imageFile.absolutePath}_$imageRefreshKey")
                                                 .build()
                                         ),
                                         contentDescription = if (page == 0) "作业前照片" else "作业后照片",
@@ -831,5 +844,10 @@ fun AfterWorkScreen(
                 fullScreenImagePath = null
             }
         )
+    }
+
+    // 可识别物件类别弹窗
+    if (showCategoriesDialog) {
+        CategoriesDialog(onDismiss = { showCategoriesDialog = false })
     }
 }
